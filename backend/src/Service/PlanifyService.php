@@ -30,13 +30,13 @@ class PlanifyService
                 }
                 $arrivalTime = $this->timeToMinutes($sample['arrivalTime']); // Temps d'arrivée en minutes
 
-                // On stocke le premier sample qui va être comparé avec les autres samples. Ce sample est considéré comme le "meilleur" pour l'instant
+                // On stocke le premier échantillon qui va être comparé avec les autres échantillons. Cet échantillon est considéré comme le "meilleur" pour l'instant
                 if ($firstSample === null) {
                     $firstSample = $sample;
                     $firstIndex = $index;
                 }
 
-                // Dans le cas où le sample actuel n'est pas le "meilleur" sample, on récupère les valeurs de priorités et de temps d'arrivée au "meilleur" sample
+                // Dans le cas où l'échantillon actuel n'est pas le "meilleur" échantillon, on récupère les valeurs de priorités et de temps d'arrivée au "meilleur" échantillon
                 if ($firstSample['priority'] === 'STAT'){
                     $firstPriority = 0;
                 } elseif ($firstSample['priority'] === 'URGENT'){
@@ -46,17 +46,17 @@ class PlanifyService
                 }
                 $firstArrivalTime = $this->timeToMinutes($firstSample['arrivalTime']);
 
-                // On compare le "meilleur" sample avec le sample actuel : on compare d'abord la priorité ou le temps d'arrivé en cas d'égalité et on en ressort le meilleur
+                // On compare le "meilleur" échantillon avec l'échantillon actuel : on compare d'abord la priorité ou le temps d'arrivé en cas d'égalité et on en ressort le meilleur
                 if ($priority < $firstPriority || ($priority == $firstPriority && $arrivalTime < $firstArrivalTime)) {
                     $firstSample = $sample;
                     $firstIndex = $index;
                 }
             }
 
-            // On ajoute le "meilleur" sample trouvé
+            // On ajoute le "meilleur" échantillon trouvé
             $samplesSorted[] = $firstSample;
 
-            // On enlève le sample de la liste initiale
+            // On enlève l'échantillon de la liste initiale
             unset($samples[$firstIndex]);
         }
         $samples = $samplesSorted;
@@ -90,7 +90,7 @@ class PlanifyService
             $sampleAnalysisTime = $sample['analysisTime'];
             $sampleArrivalTime = $this->timeToMinutes($sample['arrivalTime']);
 
-            // On trouve un technicien
+            // On trouve un technicien pour l'échantillon
             $chosenTechId = null;
             $chosenTechStart = null;
             foreach ($technicians as $index => $technician) {
@@ -102,10 +102,28 @@ class PlanifyService
                     $endTime = $startTime + $sampleAnalysisTime;
 
                     // Le technicien doit finir l'analyse avant la fin de sa journée
-                    if ($endTime <= $technicianEndTime) {
+                    if ($endTime > $technicianEndTime) {
+                        continue;
+                    }
+
+                    // On regarde si le technicien est généraliste ou non pour pouvoir prioriser les techniciens non généralistes après
+                    $isGeneral = ($technician['speciality'] === 'GENERAL');
+
+                    // On stocke le premier technicien qui va être comparé avec les autres techniciens. Ce technicien est considéré comme le "meilleur" pour l'instant
+                    if ($chosenTechId === null) {
                         $chosenTechId = $index;
                         $chosenTechStart = $startTime;
-                        break;
+                    }
+
+                    // Dans le cas où le technicien actuel n'est pas le "meilleur" technicien, on récupère le start time du "meilleur" technicien
+                    $chosenStartTime = max($technicians[$chosenTechId]['freeTime'], $sampleArrivalTime);
+                    $chosenIsGeneral = ($technicians[$chosenTechId]['speciality'] === 'GENERAL');
+
+                    // On prend le technicien qui commence le plus tôt. Si les deux techniciens comparés ont un même start time, on préviligie celui qui n'est pas général
+                    if ($startTime < $chosenStartTime || ($startTime === $chosenStartTime && !$isGeneral && $chosenIsGeneral)) {
+
+                        $chosenTechId = $index;
+                        $chosenTechStart = $startTime;
                     }
                 }
             }
@@ -115,23 +133,35 @@ class PlanifyService
                 continue; // Pas de technicien trouvé
             }
 
-            // On trouve un équipement
+            // On trouve un équipement pour l'échantillon
             $chosenEquipId = null;
             $chosenEquipStart = null;
             foreach ($equipments as $index => $equipment) {
                 if ($equipment['type'] === $sampleType) {
+                    if ($equipment['freeTime'] !== null) {
+                        $startTime = max($equipment['freeTime'], $sampleArrivalTime);
 
-                    $startTime = max($equipment['freeTime'], $sampleArrivalTime);
+                        // On stocke le premier équipement qui va être comparé avec les autres équipements. Cet équipement est considéré comme le "meilleur" pour l'instant
+                        if ($chosenEquipStart === null) {
+                            $chosenEquipId = $index;
+                            $chosenEquipStart = $startTime;
+                        }
 
-                    $chosenEquipId = $index;
-                    $chosenEquipStart = $startTime;
-                    break;
+                        // Dans le cas où l'équipement actuel n'est pas le "meilleur" équipement, on récupère le start time du "meilleur" équipement
+                        $chosenStartTime = max($equipments[$chosenEquipId]['freeTime'], $sampleArrivalTime);
+
+                        // On compare les temps de départ des équipements pour prendre le plus tôt
+                        if ($startTime < $chosenStartTime) {
+                            $chosenEquipId = $index;
+                            $chosenEquipStart = $startTime;
+                        }
+                    }
                 }
             }
 
-            if ($chosenEquipId === null) {
+            if ($chosenEquipId === null || !$equipments[$chosenEquipId]['available']) {
                 $conflicts++;
-                continue; // Pas d'équipement trouvé
+                continue; // Pas d'équipement trouvé ou équipement non available utilisé
             }
 
             // Le technicien commencera à travailler dès que lui et l'équipement seront disponibles
@@ -182,7 +212,7 @@ class PlanifyService
         $totalTime = $lastAnalysisEndTime - $firstAnalysisTime;
 
         // On calcule l'efficacité des analyses
-        $efficiency = ($totalTime / $totalAnalysisTime)*100 ;
+        $efficiency = ($totalAnalysisTime / $totalTime)*100 ;
 
         return [
             'schedule' => $schedule,
